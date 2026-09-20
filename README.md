@@ -1,8 +1,4 @@
-# Repository Intelligence Analyzer V10
-
-V10 keeps the V9 report structure and focuses on one area: producing a much more detailed, repository-specific `Overall Code Flow` while reducing local-LLM work.
-
-## What changed in V10
+# Repository Intelligence Analyzer 
 
 - Builds a compact **production runtime evidence model** before calling the local LLM.
 - Resolves HTTP route -> handler -> use case/service -> repository -> DAL/client -> database operations where source proves that chain.
@@ -103,7 +99,7 @@ HTTP method/path
 
 The analyzer must not invent missing transitions. If source evidence cannot resolve part of a flow, the report should say that rather than assume a conventional architecture.
 
-## Faster V10 LLM behavior
+## Faster LLM behavior
 
 At step `[6/8]` the console now shows two sub-steps:
 
