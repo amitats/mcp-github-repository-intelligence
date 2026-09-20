@@ -82,7 +82,7 @@ An MCP-compatible client can then retrieve the generated repository intelligence
 ## High-Level Architecture
 
 ```text
-GitHub Repository / Local Repository
+GitHub Repository 
                 |
                 v
         Repository Ingestion
@@ -124,7 +124,7 @@ GitHub Repository / Local Repository
 
 ### 1. Repository Ingestion
 
-The workflow accepts either a GitHub repository URL or a local repository path.
+The workflow accepts either a GitHub repository URL.
 
 For GitHub repositories, the project is retrieved and passed into the repository-analysis pipeline.
 
@@ -501,16 +501,6 @@ python main.py \
 
 When evaluating the natural-language detailed code-flow explanation, do not use `--skip-llm`.
 
----
-
-## Run Against a Local Repository
-
-```bash
-python main.py \
-  --source "/path/to/local/repository" \
-  --output "./analysis-output" \
-  --skip-compatibility
-```
 
 ---
 
@@ -608,7 +598,7 @@ Detailed Code Flow        MCP Compatibility Lookup
 
 ## Project Outcome
 
-The completed platform turns a GitHub repository or local codebase into structured, queryable technical intelligence.
+The completed platform turns a GitHub repository into structured, queryable technical intelligence.
 
 It combines deterministic repository analysis with selective local LLM explanation and MCP-based enrichment so engineers can move from:
 
