@@ -1,0 +1,8 @@
+requests>=2.32.0
+python-dotenv>=1.0.1
+PyYAML>=6.0.2
+tomli>=2.0.1; python_version < "3.11"
+mcp[cli]
+httpx 
+python-dotenv 
+packaging
