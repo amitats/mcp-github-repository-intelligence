@@ -1,0 +1,319 @@
+import os
+import re
+from typing import Any
+
+import httpx
+from mcp.server import MCPServer
+
+mcp = MCPServer("repository-compatibility-search")
+
+
+async def get_json(url: str) -> dict[str, Any]:
+    async with httpx.AsyncClient(
+        timeout=30,
+        follow_redirects=True,
+        headers={"User-Agent": "repository-intelligence-mcp/1.0"},
+    ) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+        return response.json()
+
+
+async def get_text(url: str) -> str:
+    async with httpx.AsyncClient(
+        timeout=30,
+        follow_redirects=True,
+        headers={"User-Agent": "repository-intelligence-mcp/1.0"},
+    ) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+        return response.text
+
+
+@mcp.tool()
+async def get_latest_package_version(
+    name: str,
+    ecosystem: str,
+) -> dict[str, Any]:
+    """
+    Return latest stable package version from an authoritative package registry.
+    Supported ecosystems: pypi, npm, maven, go, nuget, crates.
+    """
+
+    eco = ecosystem.lower().strip()
+
+    try:
+        if eco in {"python", "pypi"}:
+            data = await get_json(f"https://pypi.org/pypi/{name}/json")
+
+            version = data["info"]["version"]
+
+            return {
+                "name": name,
+                "ecosystem": "pypi",
+                "latest_stable_version": version,
+                "source": f"https://pypi.org/project/{name}/",
+                "source_type": "official-registry",
+                "status": "success",
+            }
+
+        if eco in {"javascript", "typescript", "npm", "node"}:
+            encoded_name = name.replace("/", "%2F")
+            data = await get_json(
+                f"https://registry.npmjs.org/{encoded_name}/latest"
+            )
+        
+            return {
+                "name": name,
+                "ecosystem": "npm",
+                "latest_stable_version": data.get("version"),
+                "source": f"https://www.npmjs.com/package/{name}",
+                "source_type": "official-registry",
+                "status": "success",
+            }
+        
+        if eco in {"java", "maven"}:
+            if ":" not in name:
+                return {
+                    "name": name,
+                    "ecosystem": "maven",
+                    "latest_stable_version": None,
+                    "status": "unknown",
+                    "reason": "Maven dependency must be groupId:artifactId",
+                }
+
+            group_id, artifact_id = name.split(":", 1)
+
+            url = (
+                "https://search.maven.org/solrsearch/select"
+                f"?q=g%3A%22{group_id}%22%20AND%20a%3A%22{artifact_id}%22"
+                "&core=gav&rows=50&wt=json"
+            )
+
+            async with httpx.AsyncClient(
+                timeout=60,
+                follow_redirects=True,
+                headers={
+                    "User-Agent": "repository-intelligence-mcp/1.0"
+                },
+            ) as client:
+                response = await client.get(url)
+                response.raise_for_status()
+                data = response.json()
+
+            docs = data.get("response", {}).get("docs", [])
+
+            if not docs:
+                return {
+                    "name": name,
+                    "ecosystem": "maven",
+                    "latest_stable_version": None,
+                    "status": "unknown",
+                    "reason": "Artifact not found in Maven Central",
+                }
+
+            versions = [
+                str(doc.get("v", "")).strip()
+                for doc in docs
+                if doc.get("v")
+            ]
+
+            stable_versions = [
+                version
+                for version in versions
+                if not any(
+                    marker in version.lower()
+                    for marker in [
+                        "snapshot",
+                        "alpha",
+                        "beta",
+                        "-rc",
+                        ".rc",
+                        "-m",
+                    ]
+                )
+            ]
+
+            latest = (
+                stable_versions[0]
+                if stable_versions
+                else versions[0] if versions else None
+            )
+
+            return {
+                "name": name,
+                "ecosystem": "maven",
+                "latest_stable_version": latest,
+                "source": (
+                    "https://central.sonatype.com/artifact/"
+                    f"{group_id}/{artifact_id}"
+                ),
+                "source_type": "official-registry",
+                "status": "success",
+            }
+
+        return {
+            "name": name,
+            "ecosystem": ecosystem,
+            "latest_stable_version": None,
+            "status": "unsupported-ecosystem",
+        }
+
+    except Exception as exc:
+        return {
+            "name": name,
+            "ecosystem": ecosystem,
+            "latest_stable_version": None,
+            "status": "error",
+            "reason": str(exc),
+        }
+
+
+@mcp.tool()
+async def get_runtime_support(
+    runtime: str,
+    current_version: str,
+) -> dict[str, Any]:
+    """
+    Find current runtime support/EOL information.
+    Supports Python, Node.js, Java, Go and .NET through endoflife.date.
+    """
+
+    mapping = {
+        "python": "python",
+        "node": "nodejs",
+        "node.js": "nodejs",
+        "javascript": "nodejs",
+        "java": "java",
+        "jdk": "java",
+        "go": "go",
+        "golang": "go",
+        ".net": "dotnet",
+        "dotnet": "dotnet",
+    }
+
+    runtime_key = runtime.lower().strip()
+    product = mapping.get(runtime_key)
+
+    if not product:
+        return {
+            "runtime": runtime,
+            "current_version": current_version,
+            "status": "unsupported-runtime",
+        }
+
+    try:
+        releases = await get_json(
+            f"https://endoflife.date/api/{product}.json"
+        )
+
+        normalized = current_version.lstrip("v")
+        major_minor = ".".join(normalized.split(".")[:2])
+
+        matching = None
+
+        for release in releases:
+            cycle = str(release.get("cycle", ""))
+
+            if (
+                normalized.startswith(cycle)
+                or major_minor == cycle
+                or normalized == cycle
+            ):
+                matching = release
+                break
+
+        latest = releases[0] if releases else {}
+
+        return {
+            "runtime": runtime,
+            "current_version": current_version,
+            "latest_cycle": latest.get("cycle"),
+            "latest_release": latest.get("latest"),
+            "current_cycle_details": matching,
+            "source": f"https://endoflife.date/{product}",
+            "status": "success",
+        }
+
+    except Exception as exc:
+        return {
+            "runtime": runtime,
+            "current_version": current_version,
+            "status": "error",
+            "reason": str(exc),
+        }
+
+
+@mcp.tool()
+async def search_upgrade_information(
+    name: str,
+    ecosystem: str,
+    current_version: str,
+    latest_version: str,
+) -> dict[str, Any]:
+    """
+    Return upgrade guidance URLs.
+    Uses ecosystem/project sources and GitHub as fallback.
+    """
+
+    query_name = name
+
+    github_search = (
+        "https://api.github.com/search/repositories"
+    )
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=30,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "repository-intelligence-mcp/1.0",
+            },
+        ) as client:
+            response = await client.get(
+                github_search,
+                params={"q": query_name, "per_page": 3},
+            )
+
+            if response.status_code != 200:
+                return {
+                    "name": name,
+                    "status": "not-found",
+                    "upgrade_information": None,
+                }
+
+            data = response.json()
+
+        items = data.get("items", [])
+
+        sources = []
+
+        for item in items[:3]:
+            sources.append(
+                {
+                    "title": item.get("full_name"),
+                    "url": item.get("html_url"),
+                    "type": "github-project",
+                }
+            )
+
+        return {
+            "name": name,
+            "ecosystem": ecosystem,
+            "current_version": current_version,
+            "latest_version": latest_version,
+            "upgrade_information":
+                "Review official release notes/changelog before upgrade.",
+            "sources": sources,
+            "status": "success",
+        }
+
+    except Exception as exc:
+        return {
+            "name": name,
+            "status": "error",
+            "reason": str(exc),
+        }
+
+if __name__ == "__main__":
+    mcp.run()

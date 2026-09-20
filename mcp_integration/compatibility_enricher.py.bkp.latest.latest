@@ -1,0 +1,196 @@
+import asyncio
+from typing import Any
+
+from mcp_integration.client import CompatibilityMCPClient
+from mcp_integration.version_utils import compare_versions
+
+
+def detect_ecosystem(
+    dependency_name: str,
+    source: str,
+) -> str:
+
+    source_lower = (source or "").lower()
+
+    if "go.mod" in source_lower:
+        return "go"
+
+    if (
+        "requirements" in source_lower
+        or "pyproject.toml" in source_lower
+        or "pipfile" in source_lower
+    ):
+        return "pypi"
+
+    if (
+        "package.json" in source_lower
+        or "package-lock.json" in source_lower
+        or "yarn.lock" in source_lower
+    ):
+        return "npm"
+
+    if (
+        "pom.xml" in source_lower
+        or "build.gradle" in source_lower
+        or "gradle" in source_lower
+    ):
+        return "maven"
+
+    if source_lower.endswith(".csproj"):
+        return "nuget"
+
+    if "cargo.toml" in source_lower:
+        return "crates"
+
+    return "unknown"
+
+
+async def enrich_dependency(
+    client: CompatibilityMCPClient,
+    dependency: dict[str, Any],
+) -> dict[str, Any]:
+
+    name = dependency.get("name")
+    current_version = (
+        dependency.get("version")
+        or dependency.get("current_version")
+        or dependency.get("constraint")
+    )
+
+    source = dependency.get("source", "")
+
+    ecosystem = (
+        dependency.get("ecosystem")
+        or detect_ecosystem(name, source)
+    )
+
+    if ecosystem == "unknown":
+        return {
+            **dependency,
+            "ecosystem": ecosystem,
+            "latest_version": None,
+            "compatibility": "NOT_CHECKED",
+            "notes":
+                "Dependency ecosystem could not be determined.",
+        }
+
+    latest = await client.latest_package(
+        name,
+        ecosystem,
+    )
+    #print(
+    #    f"[MCP DEBUG] name={name} ecosystem={ecosystem} "
+    #    f"source={source} result={latest}",
+    #    flush=True,
+    #)
+
+
+    latest_version = latest.get(
+        "latest_stable_version"
+    )
+
+    status = compare_versions(
+        current_version,
+        latest_version,
+    )
+
+    result = {
+        **dependency,
+
+        "ecosystem": ecosystem,
+
+        "current_version":
+            current_version,
+
+        "latest_version":
+            latest_version,
+
+        "compatibility":
+            status,
+
+        "latest_version_source":
+            latest.get("source"),
+
+        "mcp_status":
+            latest.get("status"),
+    }
+
+    if status == "UPDATE_AVAILABLE":
+
+        upgrade = await client.upgrade_information(
+            name=name,
+            ecosystem=ecosystem,
+            current_version=current_version or "",
+            latest_version=latest_version or "",
+        )
+
+        result["upgrade_information"] = (
+            upgrade.get("upgrade_information")
+        )
+
+        result["upgrade_sources"] = (
+            upgrade.get("sources", [])
+        )
+
+    return result
+
+
+async def enrich_dependencies(
+    dependencies: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+
+    client = CompatibilityMCPClient()
+
+    semaphore = asyncio.Semaphore(5)
+
+    async def worker(
+        dep: dict[str, Any]
+    ) -> dict[str, Any]:
+
+        async with semaphore:
+            try:
+                return await enrich_dependency(
+                    client,
+                    dep,
+                )
+
+            except Exception as exc:
+                return {
+                    **dep,
+                    "latest_version": None,
+                    "compatibility":
+                        "COULD_NOT_VERIFY",
+                    "notes": str(exc),
+                }
+
+    return await asyncio.gather(
+        *[
+            worker(dep)
+            for dep in dependencies
+        ]
+    )
+
+
+async def enrich_runtime(
+    runtime_name: str,
+    runtime_version: str,
+) -> dict[str, Any]:
+
+    client = CompatibilityMCPClient()
+
+    try:
+        result = await client.runtime_support(
+            runtime_name,
+            runtime_version,
+        )
+
+        return result
+
+    except Exception as exc:
+        return {
+            "runtime": runtime_name,
+            "current_version":
+                runtime_version,
+            "status": "COULD_NOT_VERIFY",
+            "reason": str(exc),
+        }
