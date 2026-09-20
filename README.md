@@ -8,7 +8,7 @@ The platform combines deterministic static repository analysis, selective local 
 
 ## What This Project Does
 
-The platform accepts a GitHub repository URL or local repository path and analyzes the codebase to build a technical view of the application.
+The automation accepts a GitHub repository URL and analyzes the codebase to build a technical view of the application.
 
 It can analyze:
 
